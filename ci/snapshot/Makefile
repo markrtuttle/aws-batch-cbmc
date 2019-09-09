@@ -14,6 +14,7 @@ ALL_PYTHON = $(wildcard \
 		snapshot-propose \
 		snapshot-update \
 		snapshot-variable \
+		proof \
 		)
 
 SNAPSHOT_PYTHON = $(filter-out cbmc_ci_%.py, $(ALL_PYTHON))
