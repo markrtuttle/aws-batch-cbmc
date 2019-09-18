@@ -180,6 +180,7 @@ class LogGroups:
             print(" .", end='', flush=True)
         print(" done (found {} items)".format(len(log_items)))
         logging.debug("LogGroups filter log events results: %s", log_items)
+        log_items = sorted(log_items, key=lambda item: item['timestamp'])
 
         log_streams = list({event['logStreamName'] for event in log_items})
         logging.info("Returning log group: %s", log_group)
@@ -207,13 +208,20 @@ class PrepareLog:
         if isinstance(proofs, list):
             pattern = ' '.join(['?"{}"'.format(proof) for proof in proofs])
 
-        log_group, log_streams, _ = log_groups.matching_streams(
+        log_group, log_streams, log_results = log_groups.matching_streams(
             log_groups.prepare(), pattern, start, end,
             'Scanning CBMC invocation logs')
-        assert len(log_streams) == 1
+        if len(log_streams) != 1:
+            message = {'UserWarning':
+                       ['Expected to find a single log stream.',
+                        'Log group: {}'.format(log_group),
+                        'Log streams: {}'.format(log_streams)]}
+            print(json.dumps(message, indent=2))
+            raise UserWarning('Expected a single log stream')
 
         self.log_group = log_group
         self.log_stream = log_streams[0]
+        self.log_results = log_results
 
         log_json = log_groups.read_stream(self.log_group, self.log_stream)
         self.repository = prepare_repository(log_json)
@@ -290,13 +298,24 @@ class InvokeLog:
         if isinstance(commits, list):
             pattern = ' '.join(['?"{}"'.format(commit) for commit in commits])
             commit_list = commits
-        log_group, log_streams, _ = log_groups.matching_streams(
+        log_group, log_streams, log_results = log_groups.matching_streams(
             log_groups.invoke(), pattern, start, end,
             'Scanning CI invocation logs')
-        assert len(log_streams) == 1
+
+        if len(log_streams) != 1:
+            message = {'UserWarning':
+                       ['Expected to find a single log stream.',
+                        'Log group: {}'.format(log_group),
+                        'Log streams: {}'.format(log_streams),
+                        'Commits: {}'.format(commits),
+                        'Start: {}'.format(start),
+                        'End: {}'.format(end)]}
+            print(json.dumps(message, indent=2))
+            raise UserWarning('Expected a single log stream')
 
         self.log_group = log_group
         self.log_stream = log_streams[0]
+        self.log_results = log_results
 
         # Webhook payload is the json blog in the log line following
         # "GitHub event:"
@@ -386,11 +405,15 @@ class StatusLog:
     """Manage the logs for the Batch Status lambda function."""
 
     def __init__(self, log_groups, start, end=None):
-        self.errors = []
-        self.log_group, self.log_streams, events = log_groups.matching_streams(
+        log_group, log_streams, log_results = log_groups.matching_streams(
             log_groups.status(), '"Unexpected Verification Result"',
             start, end, 'Scanning proof status logs')
-        for event in events:
+        self.log_group = log_group
+        self.log_streams = log_streams
+        self.log_results = log_results
+
+        self.errors = []
+        for event in self.log_results:
             self.errors.append(event['message'].strip().split()[-1])
 
     def summary(self, detail=1):
@@ -403,15 +426,29 @@ class StatusLog:
 
 ################################################################
 
-PROOF_STEP_NAMES = ['build', 'property', 'coverage', 'report']
+# A proof is entry-date-time
+# A step is build, property, coverage, report
+# A proof-step is entry-data-time-step
+
+STEPS = ['build', 'property', 'coverage', 'report']
+
+def make_proof_step(proof, step):
+    return  proof + '-' + step
+def make_proof(proof_step):
+    return '-'.join(proof_step.split('-')[:-1])
+def make_step(proof_step):
+    return proof_step.split('-')[-1]
 
 class ProofStepBatchLog:
     def __init__(self, log_groups, proof_step, log_group, log_stream):
         self.proof_step = proof_step
         self.log_group = log_group
         self.log_stream = log_stream
-        self.json = log_groups.read_stream(log_group, log_stream)
-        self.text = [event['message'] for event in self.json['events']]
+        self.json = {}
+        self.text = []
+        if log_group and log_stream: # log_stream might be None
+            self.json = log_groups.read_stream(log_group, log_stream)
+            self.text = [event['message'] for event in self.json['events']]
 
     def summary(self, detail=1):
         result = {
@@ -425,38 +462,42 @@ class ProofStepBatchLog:
             result['json'] = self.json
         return result
 
+class ProofBatchLogs:
+    def __init__(self, log_groups, start, end, proofs):
 
-class ProofBatchLog:
-    def __init__(self, log_groups, start, end, proof):
-
-        make_proof_step = lambda step: proof + '-' + step
-        make_step = lambda proof_step: proof_step.split('-')[-1]
-        self.proof = proof
-        self.proof_steps = [make_proof_step(step) for step in PROOF_STEP_NAMES]
-
-        pattern = ' '.join('?"{}"'.format(step) for step in self.proof_steps)
-        self.log_group, _, log_events = log_groups.matching_streams(
-            log_groups.batch(), pattern, start, end,
-            'Scanning batch logs for {}'.format(proof))
+        proof_steps = [make_proof_step(proof, step)
+                       for proof in proofs
+                       for step in STEPS]
+        pattern = ' '.join('?"{}"'.format(pfstep) for pfstep in proof_steps)
+        matching_streams = log_groups.matching_streams(
+            log_groups.batch(), pattern, start, end, 'Scanning AWS Batch logs')
+        self.log_group, self.log_streams, self.log_results = matching_streams
 
         self.log_stream = {}
-        for proof_step in self.proof_steps:
-            for event in log_events:
-                if proof_step in event['message']:
-                    self.log_stream[make_step(proof_step)] = event['logStreamName']
-                    break
-
         self.log = {}
-        for step in PROOF_STEP_NAMES:
-            self.log[step] = ProofStepBatchLog(
-                log_groups, make_proof_step(step),
-                self.log_group, self.log_stream[step])
+        for event in self.log_results:
+            message = event['message']
+            logstream = event['logStreamName']
+            if message.startswith('Booting with options'):
+                options = json.loads(message[len('Booting with options'):])
+                proof_step = options['jobname']
+                proof = make_proof(proof_step)
+                step = make_step(proof_step)
+                if self.log_stream.get(proof) is None:
+                    self.log_stream[proof] = {}
+                if self.log.get(proof) is None:
+                    self.log[proof] = {}
+                self.log_stream[proof][step] = logstream
+                self.log[proof][step] = ProofStepBatchLog(
+                    log_groups, proof_step, self.log_group, logstream)
 
     def summary(self, detail=1):
         result = {}
-        for step in PROOF_STEP_NAMES:
-            result[self.log[step].proof_step] = self.log[step].summary(detail)
-        return {'BatchLogs': {self.proof: result}}
+        for proof, steplogs in self.log.items():
+            result[proof] = {}
+            for step, log in steplogs.items():
+                result[proof][step] = log.summary(detail)
+        return {'BatchLogs': result}
 
 ################################################################
 
@@ -496,7 +537,7 @@ class ProofBatchStatus:
         result = {}
         for proof in proofs:
             result[proof] = {}
-            for step in PROOF_STEP_NAMES:
+            for step in STEPS:
                 proof_step = '{}-{}'.format(proof, step)
                 result[proof][step] = job_summary(self.jobs.get(proof_step))
         return result
@@ -515,9 +556,11 @@ class ProofBatchStatus:
 def job_summary(job):
     if job is None:
         return None
+    reason = None
+    if job.get('container'):
+        reason = job['container'].get('reason')
     return {'status': job['status'],
-            'reason':
-                job['container'].get('reason') or job['statusReason']}
+            'reason': reason or job['statusReason']}
 
 ################################################################
 
@@ -546,7 +589,10 @@ class ProofResult:
             }
         print(' done')
 
-        self.proof_status = self.log['property'][-2:]
+        self.proof_status = []
+        property_log = self.log['property']
+        if property_log:
+            self.proof_status = property_log[-2:]
 
     def summary(self, detail=1):
         result = {
@@ -612,7 +658,7 @@ def main():
         print(json.dumps(summary, indent=2))
         return
 
-
+    args.proofs = sorted(set(args.proofs))
     prepare = PrepareLog(log_groups, args.proofs, start, end)
     invoke = InvokeLog(log_groups, prepare.commit, start, end)
     proof_results = ProofResults(session, args.proofs)
@@ -623,9 +669,8 @@ def main():
     summary = dict(summary, **proof_results.summary(args.detail))
 
     if args.detail > 3:
-        for proof in args.proofs:
-            log = ProofBatchLog(log_groups, start, end, proof)
-            summary = dict(summary, **log.summary(args.detail))
+        log = ProofBatchLogs(log_groups, start, end, args.proofs)
+        summary = dict(summary, **log.summary(args.detail))
 
     print(json.dumps(summary, indent=2))
 
