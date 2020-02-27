@@ -13,6 +13,7 @@ import tempfile
 import itertools
 import sys
 import functools
+import requests
 
 import botocore_amazon.monkeypatch
 import boto3
@@ -66,7 +67,7 @@ def create_parser():
 
     arg.add_argument('--correlation_id',
                      help="""
-                     Correlation id used to build task trees and look up proofs. 
+                     Correlation id used to build task trees and look up proofs.
                      Prints out the failing and incomplete tasks associated
                      with the correlation id.""")
 
@@ -74,14 +75,14 @@ def create_parser():
     arg.add_argument('--task_tree',
                      action="store_true",
                      help="""
-                     Prints out the task tree for a proof (requires --correlation_id). 
+                     Prints out the task tree for a proof (requires --correlation_id).
                      """
                     )
 
     arg.add_argument('--diagnose',
                      action="store_true",
                      help="""
-                     Attempts to localize failure within a proof (requires --correlation_id). 
+                     Attempts to localize failure within a proof (requires --correlation_id).
                      """
                     )
 
@@ -97,7 +98,7 @@ def create_parser():
     arg.add_argument('--proofs',
                      nargs="+",
                      help="""
-                     A list of proof identifiers to look up in the logs.  
+                     A list of proof identifiers to look up in the logs.
                      """
                     )
 
@@ -122,7 +123,7 @@ def create_parser():
     arg.add_argument('--pprint',
                      action='store_true',
                      help="""
-                        If set, the json output is pretty-printed (good for human-reading), 
+                        If set, the json output is pretty-printed (good for human-reading),
                         otherwise it is printed on one line.
                         """)
 
@@ -929,7 +930,7 @@ class TaskTreeFailureSummary():
         result = batch.describe_jobs(jobs=[task_id])
         jobs = result['jobs']
         if not jobs:
-            error_string = """ERROR: task_id {} does not have an associated log.  
+            error_string = """ERROR: task_id {} does not have an associated log.
             AWS Batch logs are eventually disposed after batch process has completed.
             """.format(task_id)
             msgs = [error_string]
@@ -1074,7 +1075,12 @@ def main():
     logging.info('Arguments: %s', args)
 
     session = boto3.session.Session(profile_name=args.profile)
-    log_groups = LogGroups(session)
+    try:
+        log_groups = LogGroups(session)
+    except requests.exceptions.HTTPError as error:
+        if error.response.status_code == 401:
+            sys.exit("\nAuthentication failed, reauthenticate and try again.\n")
+        raise
     start, end = timestamp_interval(args.utc, args.interval)
 
     summary = {}
