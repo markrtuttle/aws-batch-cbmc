@@ -101,6 +101,12 @@ def create_parser():
                      A list of proof identifiers to look up in the logs.
                      """
                     )
+    arg.add_argument('--summary',
+                     action="store_true",
+                     help="""
+                     A brief summary of failures.  A work in progress...
+                     """
+                    )
 
     arg.add_argument('--detail',
                      type=int,
@@ -1065,6 +1071,48 @@ def create_task_tree(group, correlation_id, start_time, end_time):
 
 ###########################################################
 
+def failure_summary(session, log_groups, start, end, detail,
+                    max_log_entries, diagnose=True):
+    failed_proofs = StatusLog(log_groups, start, end).summary(detail)[
+        'FailedProofs'
+    ]
+    failed_containers = ProofBatchStatus(session, start, end).summary(detail)[
+        'FailedContainers'
+    ]
+    summary = {
+        'FailedProofs': failed_proofs,
+        'FailedContainers': failed_containers
+    }
+
+    failed_ids = {}
+    webhooks = CorrelationIds(session, log_groups, start, end).summary(detail)[
+        'correlation_ids'
+    ]
+    for webhook in webhooks:
+        cid = webhook['correlation_id']
+        task_tree = create_task_tree(log_groups, cid, start, end)
+        failures = TaskTreeFailureSummary(session, task_tree, log_groups,
+                                          start, end,
+                                          max_log_entries).summary(detail,
+                                                                   diagnose)
+        logs = {kind: failures[kind]
+                for kind in ['failed_tasks',
+                             'failed_lambda_logs',
+                             'failed_codebuild_logs',
+                             'failed_batch_logs']}
+        if any(log for _, log in logs.items()):
+            results = {
+                'webhook': webhook['webhook'],
+                'failed_tasks': logs['failed_tasks'],
+                'failed_lambda_logs': logs['failed_lambda_logs'],
+                'failed_codebuild_logs': logs['failed_codebuild_logs'],
+                'failed_batch_logs': logs['failed_batch_logs']
+            }
+            failed_ids[cid] = results
+
+    summary['FailedInovcations'] = failed_ids
+    return summary
+
 
 def main():
     args = create_parser().parse_args()
@@ -1084,6 +1132,13 @@ def main():
     start, end = timestamp_interval(args.utc, args.interval)
 
     summary = {}
+
+    if args.summary:
+        # Work in progress
+        print(json.dumps(failure_summary(session, log_groups, start, end, args.detail, args.max_log_entries),
+                         indent=2))
+        sys.exit()
+
     if args.correlation_id:
         task_tree = create_task_tree(log_groups, args.correlation_id, start, end)
         failures = TaskTreeFailureSummary(session, task_tree, log_groups, start, end, args.max_log_entries)
@@ -1129,3 +1184,4 @@ if __name__ == '__main__':
     main()
 
 #proof --profile freertos --utc 2019-09-06T05:30:00 --proofs SkipNameField-20190906-053353
+
