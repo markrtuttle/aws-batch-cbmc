@@ -302,7 +302,7 @@ def prepare_repository(log_json):
     messages = [event['message'].strip() for event in log_json['events']
                 if event['message'].startswith('INFO: Running "git clone')]
     assert len(messages) == 1
-    match = re.search('"git clone (.+) .+" in ".+"', messages[0])
+    match = re.search('"git clone.* (http.+) .+" in ".+"', messages[0])
     repo = match.group(1)
     logging.info('Found repository in prepare log:  %s', repo)
     return repo
@@ -317,7 +317,7 @@ def prepare_commit(log_json):
     assert len(merge_messages) + len(checkout_messages) == 1
 
     if checkout_messages:
-        match = re.search('"git checkout (.+)" in ".+"', checkout_messages[0])
+        match = re.search('"git checkout.* ([a-z0-9]+)" in ".+"', checkout_messages[0])
         commit = match.group(1)
     elif merge_messages:
         match = re.search('"git merge --no-edit (.+)" in ".+"', merge_messages[0])
@@ -358,6 +358,8 @@ class PrepareLogs:
         log_group, log_streams, _ = log_groups.matching_streams(
             log_groups.prepare(), pattern, start, end,
             'Scanning CBMC invocation logs')
+
+        print(log_streams)
 
         self.prepare_logs = [PrepareLog(log_groups, log_group, log_stream) for log_stream in log_streams]
         self.commits = [log.commit for log in self.prepare_logs]
