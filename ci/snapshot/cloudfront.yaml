@@ -45,6 +45,16 @@ Resources:
             logger = logging.getLogger('CloudFrontLambdaEdge')
             logger.setLevel(logging.INFO)
             PROOFS_BKT = "${S3BucketProofs}"
+            FILE_NOT_FOUND_HTML =  """
+            <h1> 404: The file you tried to access does not exist. It could be that the report has not yet been generated.
+            """
+
+            def file_not_found(headers):
+              add_security_headers(headers)
+              return {
+                "status": 404,
+                "body": FILE_NOT_FOUND_HTML
+              }
 
             def add_security_headers(headers):
               headers['strict-transport-security'] = [{'key': 'Strict-Transport-Security', 'value': 'max-age=63072000; includeSubdomains; preload'}]
@@ -58,11 +68,19 @@ Resources:
               request = event['Records'][0]['cf']['request']
               headers = request['headers']
               s3_filename = request['uri']
-              s3_obj = boto3.client("s3").get_object(Bucket=PROOFS_BKT, Key=s3_filename[1:])
+              logger.info(f"Trying to serve S3 object: {s3_filename}")
+              try:
+                s3_obj = boto3.client("s3").get_object(Bucket=PROOFS_BKT, Key=s3_filename[1:])
+              except Exception as e:
+                logger.error(f"Failed to download object from S3: {s3_filename}", exc_info=True)
+                return file_not_found(headers)
+
+
               if "Metadata" in s3_obj.keys() and  "public-website-contents" in s3_obj['Metadata'] and  s3_obj['Metadata']["public-website-contents"] == "True":
                 logger.info(f"Requested file {s3_filename} has the required metadata. Serving file...")
               else:
-                raise Exception(f"Tried to access bad file {s3_filename} that has no metadata!")
+                logger.error(f"Tried to access bad file {s3_filename} that has no metadata!")
+                return file_not_found(headers)
               add_security_headers(headers)
               return request
   IndexLambdaVersion:

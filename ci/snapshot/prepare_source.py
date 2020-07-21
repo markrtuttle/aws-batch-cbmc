@@ -383,7 +383,7 @@ def make_tarfile_name(repository, sha=None):
     filename += '-{:04}{:02}{:02}-{:02}{:02}{:02}'.format(
         now.year, now.month, now.day, now.hour, now.minute, now.second)
     if sha:
-        filename += '-{}'.format(sha.lower())
+        filename += '-{}'.format(sha.replace("/", "_").lower())
     filename += '.tar.gz'
     return filename
 

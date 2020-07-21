@@ -4,7 +4,8 @@ from functools import reduce
 from deployment_tools.account_orchestration.AwsAccount import AwsAccount
 from deployment_tools.account_orchestration.stacks_data import BUILD_TOOLS_ALARMS, BUILD_TOOLS_BUCKET_POLICY, \
     BUILD_TOOLS_CLOUDFORMATION_DATA, BUILD_TOOLS_PACKAGES, CLOUDFRONT_CLOUDFORMATION_DATA, GLOBALS_CLOUDFORMATION_DATA, \
-    PROOF_ACCOUNT_BATCH_CLOUDFORMATION_DATA, PROOF_ACCOUNT_GITHUB_CLOUDFORMATION_DATA, PROOF_ACCOUNT_PACKAGES
+    PROOF_ACCOUNT_BATCH_CLOUDFORMATION_DATA, PROOF_ACCOUNT_GITHUB_CLOUDFORMATION_DATA, PROOF_ACCOUNT_PACKAGES, \
+    GITHUB_WORKER_DATA
 from deployment_tools.snapshot_managers.SnapshotManager import PROOF_SNAPSHOT_PREFIX, SnapshotManager, TOOLS_SNAPSHOT_PREFIX
 from deployment_tools.aws_managers.key_constants import BUILD_TOOLS_ACCOUNT_ID_OVERRIDE_KEY, BUILD_TOOLS_SNAPSHOT_ID_KEY, \
     CLOUDFRONT_URL_KEY, PIPELINES_KEY, PROOF_ACCOUNT_ID_TO_ADD_KEY, S3_BUCKET_PROOFS_OVERRIDE_KEY, SNAPSHOT_ID_OVERRIDE_KEY
@@ -205,6 +206,14 @@ class AccountOrchestrator:
                                               })
         cloudfront_url = self.cloudfront_account.parameter_manager.get_value("CloudfrontUrl")
         self.deploy_proof_account_github(cloudfront_url=cloudfront_url)
+
+    def deploy_github_queue_stack(self):
+        self.logger.info("Deploying github queue stack in proof account {}".format(self.proof_account.account_id))
+        self.proof_account.deploy_stacks(GITHUB_WORKER_DATA,
+                                         s3_template_source=PROOF_ACCOUNT_IMAGE_S3_SOURCE,
+                                         overrides={
+                                             BUILD_TOOLS_ACCOUNT_ID_OVERRIDE_KEY: self.build_tools.account_id
+                                         })
 
     def get_account_snapshot_id(self, source_profile):
         """

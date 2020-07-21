@@ -33,6 +33,11 @@ Parameters:
     Default: ""
     Description: "The URL for the cloudfront that serves our proof reports"
 
+  GithubQueueUrl:
+    Type: String
+    Default: ""
+    Description: "Url for github queue"
+
 Resources:
 
   S3BucketProofs:
@@ -79,6 +84,10 @@ Resources:
                   - s3:PutObject
                 Effect: Allow
                 Resource: !Join ["/", [!Sub "${S3BucketProofs.Arn}", "*"]]
+              - Action:
+                  - sqs:SendMessage
+                Effect: Allow
+                Resource: "*"
               - Action:
                   - s3:ListBucket
                 Effect: Allow
@@ -141,6 +150,7 @@ Resources:
           PKG_BKT: !Sub "${S3BucketToolsName}/snapshot/snapshot-${SnapshotID}"
           CBMC_CI_UPDATING_STATUS: True
           CLOUDFRONT_URL: !Ref CloudfrontUrl
+          GITHUB_QUEUE_URL: !Ref GithubQueueUrl
 
   BatchEventRule:
     Type: AWS::Events::Rule
@@ -333,7 +343,10 @@ Resources:
                   - s3:ListBucket
                 Effect: Allow
                 Resource: !Sub "arn:aws:s3:::${S3BucketToolsName}"
-
+              - Action:
+                  - sqs:SendMessage
+                Effect: Allow
+                Resource: "*"
               - Action:
                   - s3:GetObject
                   - s3:PutObject
@@ -414,6 +427,9 @@ Resources:
           - Name: CLOUDFRONT_URL
             Type: PLAINTEXT
             Value: !Ref CloudfrontUrl
+          - Name: GITHUB_QUEUE_URL
+            Type: PLAINTEXT
+            Value: !Ref GithubQueueUrl
       Name: "Prepare-Source-Project"
       ServiceRole: !Ref PrepareSourceRole
       Source:

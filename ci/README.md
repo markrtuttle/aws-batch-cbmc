@@ -1,3 +1,3 @@
 # Continuous Integration
 
-This directory contains three implementations of continuous integration.  The snapshot implementation is the current one.
+Snapshot contains the current implementation of CI.

@@ -10,27 +10,35 @@ import boto3
 import github
 
 from cbmc_ci_timer import Timer
+CBMC_RETRY_KEYWORDS = ["CBMC_RETRY", "/cbmc run checks"]
 
 def update_github_status(repo_id, sha, status, ctx, desc, jobname, post_url = False):
-    kwds = {'state': status,
-            'context': "CBMC Batch: " + ctx,
-            'description': desc}
+    target_url = None
+
     if jobname and post_url:
         cloudfront_url = os.environ['CLOUDFRONT_URL']
-        kwds['target_url'] = (f"https://{cloudfront_url}/{jobname}/out/html/index.html")
+        target_url = (f"https://{cloudfront_url}/{jobname}/out/html/index.html")
 
     updating = os.environ.get('CBMC_CI_UPDATING_STATUS')
+    queue_url = os.environ.get("GITHUB_QUEUE_URL")
+    pr = sha.replace("origin/pr/", "") if "origin/pr/" in sha else None
     if updating and updating.strip().lower() == 'true':
-        print("Updating GitHub status")
-        print(json.dumps(kwds, indent=2))
-        g = github.Github(get_github_personal_access_token())
-        print("Updating GitHub as user: {}".format(g.get_user().login))
-        print("1-hour rate limit remaining: {}".format(g.rate_limiting[0]))
-        g.get_repo(int(repo_id)).get_commit(sha=sha).create_status(**kwds)
+        update_github_msg = {
+            "repo_id": repo_id,
+            "oath": get_github_personal_access_token(),
+            "commit": sha,
+            "pr": pr,
+            "status": status,
+            "context": "CBMC Batch: " + ctx,
+            "description": desc,
+            "cloudfront_url": target_url
+        }
+        sqs = boto3.client("sqs")
+        print(f"Sending a message to the Github worker queue: {json.dumps(update_github_msg, indent=2)}")
+        sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(update_github_msg), MessageGroupId=sha)
         return
 
     print("Not updating GitHub status")
-    print(json.dumps(kwds, indent=2))
 
 def get_github_personal_access_token():
     """
@@ -225,6 +233,35 @@ def parse_pr(body):
 
     return (base_repo_name, base_repo_id, base_repo_branch, head_sha, draft)
 
+def parse_issue_type(body):
+    """
+    Parse the pull request event body for the base and head branches,
+    and get the repository name, repository id, and branch name for the base
+    branch, and get the sha for the head commit on the head branch.
+
+    event has a format as described here:
+        https://developer.github.com/v3/activity/events/types/#pullrequestevent
+
+    """
+    comment_text = body["comment"]["body"]
+    if comment_text not in CBMC_RETRY_KEYWORDS:
+        # We ignore all events that are not retry keywords
+        return (None, None, None, None, None)
+
+    base_repo_name = body["repository"]["full_name"]
+    base_repo_id = body["repository"]["id"]
+    base_repo_branch = "COMMENT_RETRY"
+    draft = False  # FIXME: We are assuming always not a draft
+    pr_num = body["issue"]["number"]
+    head_sha = f"origin/pr/{pr_num}"
+    return (base_repo_name, base_repo_id, base_repo_branch, head_sha, draft)
+
+
+
+
+
+
+
 def parse_push(body):
     """
     Parse the push event body and get the repository name, repository id,
@@ -271,4 +308,10 @@ def parse_event(event):
         return parse_pr(body)
     if event_type == "push":
         return parse_push(body)
-    raise ValueError("Unexpected event type: {}".format(event_type))
+    if event_type == "issue_comment":
+        return parse_issue_type(body)
+    else:
+        print(f"Unhandled webhook event type: '{event_type}'. Ignoring...")
+        return (None, None, None, None, None)
+
+    # raise ValueError("Unexpected event type: {}".format(event_type))

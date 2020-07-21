@@ -115,6 +115,7 @@ if __name__ == '__main__':
             raise Exception("Must provide snapshot ID to deploy or generate new snapshot")
         add_proof_account_to_bucket_policy_only_once(account_orchestrator)
         account_orchestrator.use_existing_proof_account_snapshot(snapshot_to_deploy)
+        account_orchestrator.deploy_github_queue_stack()
         account_orchestrator.deploy_proof_account_github()
         account_orchestrator.deploy_proof_account_stacks()
         if args.cloudfront_profile:
